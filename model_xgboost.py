@@ -1,10 +1,10 @@
 import warnings
 import os
-import matplotlib.pyplot as plt
 warnings.filterwarnings("ignore")
 
 import numpy as np
 import pandas as pd
+import matplotlib.pyplot as plt
 
 from sklearn.model_selection import StratifiedKFold, cross_validate, cross_val_predict
 from sklearn.metrics import (
@@ -14,8 +14,8 @@ from sklearn.metrics import (
   recall_score,
   fbeta_score,
 )
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.pipeline import Pipeline
+
+from xgboost import XGBClassifier
 
 from base_functions import (
   RANDOM_STATE,
@@ -27,10 +27,6 @@ from base_functions import (
 
 
 def encontrar_melhor_threshold(y_true, y_proba, beta=2.0):
-  """
-  Encontra o threshold que maximiza o F-beta (beta > 1 dá mais peso ao recall).
-  Também retorna o recall e a precision nesse threshold.
-  """
   thresholds = np.linspace(0.1, 0.9, 81)
 
   best_thr = 0.5
@@ -45,7 +41,6 @@ def encontrar_melhor_threshold(y_true, y_proba, beta=2.0):
     prec = precision_score(y_true, y_pred, zero_division=0)
     fbeta = fbeta_score(y_true, y_pred, beta=beta, zero_division=0)
 
-    # critério: maximizar F-beta
     if fbeta > best_fbeta:
       best_fbeta = fbeta
       best_thr = thr
@@ -54,32 +49,50 @@ def encontrar_melhor_threshold(y_true, y_proba, beta=2.0):
 
   return best_thr, best_fbeta, best_recall, best_precision
 
-
 def treinar_modelo(df, model_name):
   # ===== Pré-processamento =====
   X, y, num_cols, cat_cols = get_data_and_features(df)
   pre = get_preprocessor(X, num_cols, cat_cols)
 
-  # ===== Modelo =====
-  clf = RandomForestClassifier(
-    n_estimators=200,
-    max_depth=15,
-    min_samples_leaf=20,
-    n_jobs=-1,
+  # ===== Cálculo do peso da classe positiva para o XGBoost =====
+  n_pos = y.sum()
+  n_neg = len(y) - n_pos
+
+  if n_pos == 0 or n_neg == 0:
+    # caso extremo, não dá pra calcular razão, evita divisão por zero
+    scale_pos_weight = 1.0
+    print("[AVISO] Classe completamente desbalanceada (só 0 ou só 1). "
+          "Usando scale_pos_weight = 1.0.")
+  else:
+    scale_pos_weight = n_neg / n_pos
+    print(f"[XGBoost] scale_pos_weight calculado como: {scale_pos_weight:.4f} (negativos/positivos)")
+
+  # ===== Modelo XGBoost =====
+  clf = XGBClassifier(
+    n_estimators=300,
+    max_depth=6,
+    learning_rate=0.05,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    objective="binary:logistic",
+    eval_metric="logloss",
     random_state=RANDOM_STATE,
-    class_weight=CLASS_WEIGHT,  # pode trocar pra {0:1, 1:3} se quiser forçar mais a classe 1
+    n_jobs=-1,
+    scale_pos_weight=scale_pos_weight,
+    tree_method="hist",
   )
 
+  from sklearn.pipeline import Pipeline
   pipe = Pipeline(steps=[
     ("preprocess", pre),
     ("clf", clf),
   ])
 
-  # ===== Cross-validation com métricas padrão =====
+  # ===== Cross-validation =====
   cv = StratifiedKFold(
     n_splits=5,
     shuffle=True,
-    random_state=RANDOM_STATE
+    random_state=RANDOM_STATE,
   )
 
   scoring = {
@@ -100,8 +113,8 @@ def treinar_modelo(df, model_name):
     return_train_score=False,
   )
 
-  # ===== Probabilidades out-of-fold para ajuste de threshold =====
-  print("\n[Random Forest] Gerando probabilidades com cross_val_predict para ajustar threshold (otimizar F2)...")
+  # ===== Probabilidades out-of-fold =====
+  print("\n[XGBoost] Gerando probabilidades out-of-fold para achar melhor threshold...")
   y_proba = cross_val_predict(
     pipe,
     X,
@@ -109,30 +122,31 @@ def treinar_modelo(df, model_name):
     cv=cv,
     method="predict_proba",
     n_jobs=-1,
-  )[:, 1]  # probabilidade da classe 1 (rejeição)
+  )[:, 1]
 
-  # ===== Encontrar melhor threshold com foco em recall/F2 =====
+  # ===== Threshold =====
   best_thr, best_f2, best_recall_thr, best_precision_thr = encontrar_melhor_threshold(
     y_true=y,
     y_proba=y_proba,
-    beta=2.0,  # F2-score → mais peso ao recall
+    beta=2.0,
   )
 
-  print(f"\n[Random Forest] Melhor threshold (F2): {best_thr:.3f}")
-  print(f"[Random Forest] Recall (classe 1) no melhor threshold: {best_recall_thr:.4f}")
-  print(f"[Random Forest] Precision (classe 1) no melhor threshold: {best_precision_thr:.4f}")
-  print(f"[Random Forest] F2-score no melhor threshold: {best_f2:.4f}")
+  print(f"\n[XGBoost] Melhor threshold: {best_thr:.4f}")
+  print(f"[XGBoost] F2 no melhor threshold: {best_f2:.4f}")
+  print(f"[XGBoost] Recall no melhor threshold: {best_recall_thr:.4f}")
+  print(f"[XGBoost] Precisão no melhor threshold: {best_precision_thr:.4f}")
 
-  # ===== Matriz de confusão usando o melhor threshold =====
   y_pred_best = (y_proba >= best_thr).astype(int)
+
+  # ===== Matriz de confusão =====
   cm = confusion_matrix(y, y_pred_best)
   tn, fp, fn, tp = cm.ravel()
 
-  print("\n[Random Forest] Matriz de confusão (usando melhor threshold):")
+  print("\n[XGBoost] Matriz de confusão (melhor threshold):")
   print(cm)
-  print("\nFN (falsos negativos = rejeição não detectada) é o erro mais crítico!")
+  print("\nFN (falsos negativos) são os mais críticos!")
 
-  print("\n[Random Forest] Relatório de classificação (melhor threshold):\n")
+  print("\n[XGBoost] Relatório de classificação (melhor threshold):\n")
   print(classification_report(
     y,
     y_pred_best,
@@ -142,7 +156,7 @@ def treinar_modelo(df, model_name):
 
   # ===== Importância de features =====
   try:
-    print("\n[Random Forest] Ajustando modelo final em todo o dataset para calcular importâncias de features...")
+    print("\n[XGBoost] Ajustando modelo final em todo o dataset para calcular importâncias de features...")
     final_pipe = pipe.fit(X, y)
 
     model_step = final_pipe.named_steps["clf"]
@@ -184,17 +198,17 @@ def treinar_modelo(df, model_name):
       )
 
       top_n = min(10, len(imp_df))
-      print(f"\n[Random Forest] Top {top_n} variáveis mais importantes (em %):")
+      print(f"\n[XGBoost] Top {top_n} variáveis mais importantes (em %):")
       print(imp_df.head(top_n).to_string(index=False))
 
       base_name = model_name.lower().replace(' ', '_')
 
       os.makedirs("Features", exist_ok=True)
-      outname = os.path.join("Features", f"feature_importances_{base_name}.csv")
-      imp_df.to_csv(outname, index=False)
-      print(f"\n[Random Forest] Importâncias salvas em {outname}")
+      outname_csv = os.path.join("Features", f"feature_importances_{base_name}.csv")
+      imp_df.to_csv(outname_csv, index=False)
+      print(f"\n[XGBoost] Importâncias salvas em {outname_csv}")
 
-      # Gera gráfico de importâncias
+      # gráfico
       try:
         os.makedirs("Gráficos", exist_ok=True)
         top_plot = min(10, len(imp_df))
@@ -207,11 +221,11 @@ def treinar_modelo(df, model_name):
         outname_png = os.path.join("Gráficos", f"feature_importances_{base_name}.png")
         plt.savefig(outname_png, dpi=300)
         plt.close()
-        print(f"[Random Forest] Gráfico de importâncias salvo em {outname_png}")
+        print(f"[XGBoost] Gráfico de importâncias salvo em {outname_png}")
       except Exception as e:
         print(f"[AVISO] Não foi possível gerar gráfico de importâncias para {model_name}: {e}")
     else:
-      print("[AVISO] Modelo RandomForest não possui atributo feature_importances_.")
+      print("[AVISO] Modelo XGBoost não possui atributo feature_importances_.")
   except Exception as e:
     print(f"[AVISO] Não foi possível calcular importâncias de features para {model_name}: {e}")
 
@@ -229,13 +243,11 @@ def treinar_modelo(df, model_name):
     "accuracy_mean": np.mean(results["test_accuracy"]),
     "accuracy_std": np.std(results["test_accuracy"]),
 
-    # infos específicas do threshold escolhido
     "best_threshold": float(best_thr),
     "recall_at_best_threshold": float(best_recall_thr),
     "precision_at_best_threshold": float(best_precision_thr),
     "f2_at_best_threshold": float(best_f2),
 
-    # matriz de confusão no melhor threshold
     "tn": int(tn),
     "fp": int(fp),
     "fn": int(fn),
@@ -246,4 +258,4 @@ def treinar_modelo(df, model_name):
 
 
 if __name__ == "__main__":
-  main_template(treinar_modelo, "Random Forest (Cross-Validation)")
+  main_template(treinar_modelo, "XGBoost (Cross-Validation)")

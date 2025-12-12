@@ -1,10 +1,12 @@
-import pandas as pd
+import os
 import numpy as np
+import pandas as pd
 import matplotlib.pyplot as plt
 
 from base_functions import carregar_dados_com_subamostragem, tratar_features, RANDOM_STATE, CLASS_WEIGHT
 from model_decision_tree import treinar_modelo as treinar_dt
 from model_random_forest import treinar_modelo as treinar_rf
+from model_xgboost import treinar_modelo as treinar_xgb
 from model_ann import treinar_modelo as treinar_ann
 
 def main():
@@ -24,11 +26,15 @@ def main():
   print("\n===== Artificial Neural Networks =====")
   metrics_list.append(treinar_ann(df, "Artificial Neural Networks (Cross-Validation)"))
 
+  print("\n===== XGBoost =====")
+  metrics_list.append(treinar_xgb(df, "XGBoost (Cross-Validation)"))
+
   # Remove entradas None (caso algum modelo falhe)
   metrics_list = [m for m in metrics_list if m is not None]
 
   df_metrics = pd.DataFrame(metrics_list)
-  out_name = "comparacao_modelos.csv"
+  os.makedirs("Comparações", exist_ok=True)
+  out_name = os.path.join("Comparações", "comparacao_modelos.csv")
   df_metrics.to_csv(out_name, index=False)
 
   print(f"\nCSV de comparação salvo como: {out_name}\n")
@@ -57,10 +63,14 @@ def main():
     "fp": "False Positives — casos sem rejeição, mas previstos incorretamente como rejeição (falsos alarmes).",
     "fn": "False Negatives — casos com rejeição que o modelo não detectou (erro mais crítico).",
     "tp": "True Positives — casos corretamente previstos como rejeição.",
+    "best_threshold": "Limiar de decisão que maximizou o F2 para o modelo (quando calculado).",
+    "recall_at_best_threshold": "Recall da classe positiva usando o melhor limiar (F2).",
+    "precision_at_best_threshold": "Precisão da classe positiva usando o melhor limiar (F2).",
+    "f2_at_best_threshold": "Valor do F2-Score no melhor limiar.",
   }
 
   for k, v in explicacoes.items():
-    print(f"{k:<15} => {v}")
+    print(f"{k:<25} => {v}")
 
   print("=" * 80)
 
@@ -103,39 +113,121 @@ def main():
   print("=" * 80)
 
   # =======================
-  # GRÁFICO COM MATPLOTLIB
+  # HEATMAP – MODELOS x MÉTRICAS (0.5 E THRESHOLD OTIMIZADO)
   # =======================
-  print("\nGerando gráfico de comparação com matplotlib...")
+  print("\nGerando heatmap...")
 
-  # Métricas que vamos plotar
-  metrics_to_plot = ["roc_auc_mean", "recall_mean", "precision_mean", "f1_mean", "accuracy_mean"]
-  metric_labels = ["ROC-AUC", "Recall", "Precision", "F1-Score", "Accuracy"]
+  if {"recall_at_best_threshold", "precision_at_best_threshold", "f2_at_best_threshold"}.issubset(df_metrics.columns):
+    # Heatmap com métricas de 0.5 e do melhor threshold
+    metrics_heatmap = [
+      "roc_auc_mean",              # indep. de threshold, mas importante no painel
+      "accuracy_mean",             # idem
+      "recall_mean",               # threshold 0.5
+      "precision_mean",            # threshold 0.5
+      "f1_mean",                   # threshold 0.5
+      "recall_at_best_threshold",  # threshold otimizado
+      "precision_at_best_threshold",
+      "f2_at_best_threshold",
+    ]
+    metric_labels_heatmap = [
+      "ROC-AUC (CV)",
+      "Acurácia (CV)",
+      "Recall (0.5)",
+      "Precisão (0.5)",
+      "F1-Score (0.5)",
+      "Recall (thr otimizado)",
+      "Precisão (thr otimizado)",
+      "F2 (thr otimizado)",
+    ]
+  else:
+    # Caso não haja colunas de threshold otimizado, faz um heatmap básico apenas com 0.5
+    metrics_heatmap = ["roc_auc_mean", "recall_mean", "precision_mean", "f1_mean", "accuracy_mean"]
+    metric_labels_heatmap = ["ROC-AUC", "Recall (0.5)", "Precisão (0.5)", "F1-Score (0.5)", "Acurácia (CV)"]
 
-  # Eixo X: uma posição para cada métrica
+  data_heatmap = df_metrics[metrics_heatmap].to_numpy()
+
+  fig, ax = plt.subplots(figsize=(12, 6))
+  img = ax.imshow(data_heatmap, aspect="auto", cmap='YlGnBu')
+
+  ax.set_yticks(np.arange(len(df_metrics)))
+  ax.set_yticklabels(df_metrics["model"])
+
+  ax.set_xticks(np.arange(len(metrics_heatmap)))
+  ax.set_xticklabels(metric_labels_heatmap, rotation=15, ha='right')
+
+  # valores dentro das células
+  for i in range(data_heatmap.shape[0]):
+    for j in range(data_heatmap.shape[1]):
+      ax.text(j, i, f"{data_heatmap[i, j]:.3f}",
+              ha="center", va="center", fontsize=9, color="black")
+
+  ax.set_title("Heatmap – Modelos x Métricas (Threshold 0.5 e Otimizado)")
+  fig.colorbar(img, ax=ax, fraction=0.046, pad=0.04)
+
+  plt.tight_layout()
+  out_heatmap = os.path.join("Comparações", "heatmap_modelos_metricas.png")
+  plt.savefig(out_heatmap, dpi=300)
+  print(f"Heatmap salvo como: {out_heatmap}")
+
+  plt.close()
+
+  # =======================
+  # GRÁFICO PRINCIPAL – BARRAS AGRUPADAS (SOMENTE THRESHOLD 0.5)
+  # =======================
+  print("\nGerando gráfico de comparação com threshold padrão (0.5)...")
+
+  # Comparação entre modelos APENAS com threshold padrão
+  metrics_to_plot = [
+    "roc_auc_mean",
+    "accuracy_mean",
+    "recall_mean",
+    "precision_mean",
+    "f1_mean",
+  ]
+  metric_labels = [
+    "ROC-AUC (CV)",
+    "Acurácia (CV)",
+    "Recall (0.5)",
+    "Precisão (0.5)",
+    "F1-Score (0.5)",
+  ]
+
   x = np.arange(len(metrics_to_plot))
   n_models = len(df_metrics)
-  width = 0.25  # largura de cada barra
+  width = 0.15
+  offset_center = (n_models - 1) / 2
 
-  fig, ax = plt.subplots(figsize=(10, 6))
+  fig, ax = plt.subplots(figsize=(14, 7))
+
+  colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728']
 
   for i, row in df_metrics.iterrows():
-    model_name = row["model"]
+    offset = (i - offset_center) * width
     values = [row[m] for m in metrics_to_plot]
-    ax.bar(x + i * width, values, width, label=model_name)
+    ax.bar(x + offset, values, width, label=row["model"], color=colors[i])
 
-  ax.set_xticks(x + width * (n_models - 1) / 2)
+  ax.set_xticks(x)
   ax.set_xticklabels(metric_labels)
   ax.set_ylim(0.0, 1.0)
   ax.set_ylabel("Score")
-  ax.set_title("Comparação de Modelos – Métricas Médias (Cross-Validation)")
-  ax.legend()
+  ax.set_title("Comparação de Modelos – Métricas com Threshold 0.5")
+  ax.legend(loc='upper left')
   ax.grid(axis="y", linestyle="--", alpha=0.4)
 
   plt.tight_layout()
-  plt.savefig("comparacao_modelos.png", dpi=300)
-  print("Gráfico salvo como: comparacao_modelos.png")
+  out_graph = os.path.join("Comparações", "comparacao_modelos.png")
+  plt.savefig(out_graph, dpi=300)
+  print(f"Gráfico principal salvo como: {out_graph}")
 
-  plt.show()
+  plt.close()
+
+  # =======================
+  # REMOVIDOS:
+  # - GRÁFICO ADICIONAL – MÉTRICAS COM THRESHOLD OTIMIZADO
+  # - GRÁFICOS POR MÉTRICA – 0.5 x THRESHOLD OTIMIZADO
+  # =======================
+
+  print("\n✅ Todos os gráficos principais foram gerados com sucesso!")
 
 if __name__ == "__main__":
   main()

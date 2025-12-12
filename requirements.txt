@@ -1,4 +1,6 @@
+joblib
 pandas
 pyarrow
+xgboost
 matplotlib
 scikit-learn

@@ -18,8 +18,6 @@ CSV_CHUNK_SIZE = 50000 # Tamanho do chunk para ler o CSV
 FEATURE_IMPORTANCE_CSV = "feature_importances.csv"
 CLASS_WEIGHT = "balanced"
 RANDOM_STATE = 42
-TEST_SIZE = 0.2 # 20% para teste
-
 
 # ===== FUNÇÕES DE BASE =====
 
@@ -53,7 +51,6 @@ def processar_df(df: pd.DataFrame):
   # Garante tipo inteiro limpo na própria coluna TARGET
   df[target_col] = y_num[mask_valid].astype(int)
   return df
-
 
 def carregar_dados_com_subamostragem():
   """Carrega dados do cache ou CSV, faz subamostragem da classe majoritária e retorna df."""
@@ -127,17 +124,61 @@ def carregar_dados_com_subamostragem():
 
   return df_full
 
-
 def tratar_features(df: pd.DataFrame) -> pd.DataFrame:
-  """Converte colunas Y/N/U para 0/1/NaN e textos numéricos para float/int, exceto a TARGET."""
+  """
+  Converte colunas Y/N/U para 0/1/NaN e textos numéricos para float/int,
+  exceto colunas de antígeno BW4/BW6, que são convertidas para categorias reais
+  para evitar interpretações numéricas incorretas.
+  """
+
+  # Colunas a serem tratadas
   cols = [c for c in df.columns if c != TARGET]
+
+  # Valores que representam Y/N/U e variações
   ynu_set = {"Y", "N", "y", "n", "U", "u", "OTHER", "Null or Missing", "NULL", "MISSING"}
 
+  # Listas para log
   conv_yn = []
   conv_num = []
+  conv_bw = []
+
+  # --- Tratamento especial para BW6 e BW4 ---
+
+  bw_map = {
+    "0": "absent",
+    "95": "positive",
+    "96": "negative",
+    "98": "blank",
+    "99": "not_tested",
+    "998": "unknown",
+    "OTHER": "unknown",
+    "Null or Missing": "missing",
+    "NULL": "missing",
+    "MISSING": "missing"
+  }
+
+  for bw_col in ["BW6", "BW4"]:
+    if bw_col in df.columns:
+      df[bw_col] = (
+        df[bw_col]
+        .astype(str)
+        .str.strip()
+        .map(bw_map)
+        .fillna("missing")
+        .astype("object")
+      )
+
+    conv_bw.append(bw_col)
+
+  # --- Demais tratamentos ---
 
   for c in cols:
+    if c in ["BW6", "BW4"]:
+      continue  # já tratadas acima
+
     s = df[c]
+
+    # Se já for número, pula
     if np.issubdtype(s.dropna().dtype, np.number):
       continue
 
@@ -146,16 +187,31 @@ def tratar_features(df: pd.DataFrame) -> pd.DataFrame:
       continue
 
     vals = set(map(str.strip, map(str, s_nonnull.unique())))
+
+    # Y/N/U → 0/1/NaN
     if vals.issubset(ynu_set):
-      mapa = {"Y": 1, "y": 1, "N": 0, "n": 0, "U": np.nan, "u": np.nan, "OTHER": np.nan, "Null or Missing": np.nan, "NULL": np.nan, "MISSING": np.nan}
+      mapa = {
+        "Y": 1, "y": 1,
+        "N": 0, "n": 0,
+        "U": np.nan, "u": np.nan,
+        "OTHER": np.nan,
+        "Null or Missing": np.nan,
+        "NULL": np.nan,
+        "MISSING": np.nan
+      }
       df[c] = s.astype(str).str.strip().map(mapa)
       conv_yn.append(c)
       continue
 
+    # Textos numéricos → numérico (quando >50% são números válidos)
     coerced = pd.to_numeric(s, errors="coerce")
     if coerced.notna().sum() / s_nonnull.count() >= 0.5:
       df[c] = coerced
       conv_num.append(c)
+
+  # Logs
+  if conv_bw:
+    print(f"\nColunas BW4/BW6 convertidas para categorias ({len(conv_bw)}): {conv_bw}")
 
   if conv_yn:
     print(f"\nColunas convertidas de Y/N/U/OTHER/Null or Missing para 0/1/NaN ({len(conv_yn)}):")
@@ -169,26 +225,56 @@ def tratar_features(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def get_preprocessor(X, num_cols, cat_cols):
-  """Monta o pré-processador (numéricas: median+scaler, categóricas: most_frequent+one-hot)."""
+  """
+  Monta o pré-processador dos dados.
+
+  - Numéricas: valores faltantes são preenchidos pela mediana e os dados são padronizados
+    com StandardScaler, que coloca todas as variáveis na mesma escala (média 0 e desvio 1).
+
+  - Categóricas: valores ausentes são preenchidos pelo valor mais frequente e convertidos
+    em vetores binários por One-Hot Encoding, permitindo que o modelo trate categorias
+    como informações independentes sem criar ordem entre elas.
+  
+  O ColumnTransformer coordena essas etapas, aplicando o tratamento apropriado para cada grupo de colunas.
+  """
+
   pre = ColumnTransformer(
     transformers=[
-      ("num", Pipeline(steps=[("imp", SimpleImputer(strategy="median")), ("scaler", StandardScaler())]), num_cols),
-      ("cat", Pipeline(steps=[("imp", SimpleImputer(strategy="most_frequent")), ("oh", OneHotEncoder(handle_unknown="ignore"))]), cat_cols),
+      # ---- TRATAMENTO PARA VARIÁVEIS NUMÉRICAS ----
+      (
+        "num",
+        Pipeline(steps=[
+          ("imp", SimpleImputer(strategy="median")),
+          ("scaler", StandardScaler())
+        ]),
+        num_cols
+      ),
+
+      # ---- TRATAMENTO PARA VARIÁVEIS CATEGÓRICAS ----
+      (
+        "cat",
+        Pipeline(steps=[
+          ("imp", SimpleImputer(strategy="most_frequent")),
+          ("oh", OneHotEncoder(handle_unknown="ignore"))
+        ]),
+        cat_cols
+      ),
     ],
+
     remainder="drop",
   )
+
   return pre
 
-
 def get_data_and_features(df: pd.DataFrame):
-  """Separa X, y, remove leakage e define listas de colunas numéricas e categóricas."""
+  """Separa X, y, remove leakage conhecido e define listas de colunas numéricas e categóricas."""
   if TARGET not in df.columns:
     raise SystemExit(f"[ERRO] DataFrame sem coluna alvo '{TARGET}'.")
 
   y = df[TARGET]
   X = df.drop(columns=[TARGET])
 
-  # Remover colunas que NÃO podem ser usadas como preditoras (leakage ou IDs)
+  # === 1) Colunas de leakage que você JÁ definiu ===
   leak_cols = [
     "ACUTE_REJ_EPI_KI",
     "REJCNF_KI",
@@ -201,17 +287,51 @@ def get_data_and_features(df: pd.DataFrame):
     "FIRST_WK_DIAL",
     "REJECTION_LABEL",
     "REJECTION_SOURCE",
+    "CREAT6M",
     "TRR_ID",
     "TRR_ID_CODE",
     "PT_CODE",
+    "SERUM_CREAT",
+    "GTIME_KI",
+    "GRF_STAT_KI",
+    "GSTATUS_KI",
+    "CREAT1Y",
+    "CREAT_DON",
+    "CREAT_TRR",
+    "TXPAN_None",
+    "TXPAN_W",
+    "DIABETES_DON",
+    "HIST_DIABETES_DON",
+    "INSULIN_DON",
+    "INSULIN_DEP_DON",
+    "HIST_INSULIN_DEP_DON",
+    "INSULIN_DUR_DON",
+    "PRE_AVG_INSULIN_USED_OLD_TRR",
+    "TX_PAN_W",
+    "TX_PAN",
+    "EDUCATION",
+    "EDUCATION_DON",
+    "DONOR_ID",
+    "ORGAN_KI",
+    "ORGAN_KP",
+    "ORGAN"
   ]
 
-  cols_to_drop = [c for c in leak_cols if c in X.columns]
+  # === 2) Extra: garantir que QUALQUER coisa de TXPAN saia (variações de nome) ===
+  # Isso é só pra cobrir o caso TXPAN_W virar algo ligeiramente diferente no CSV.
+  txpan_cols = [c for c in X.columns if "TXPAN" in c.upper() or "TX_PAN" in c.upper()]
+
+  # === 3) IDs genéricos que você já queria tirar ===
+  extra_ids = []
   if "_id" in X.columns:
-    cols_to_drop.append("_id")
+    extra_ids.append("_id")
+
+  cols_to_drop = [c for c in leak_cols if c in X.columns]
+  cols_to_drop = sorted(set(cols_to_drop + txpan_cols + extra_ids))
 
   if cols_to_drop:
     print("\n[INFO] Removendo colunas de leakage/ID do modelo:")
+    print(f"Total: {len(cols_to_drop)}")
     print(cols_to_drop)
     X = X.drop(columns=cols_to_drop, errors="ignore")
 
@@ -292,12 +412,29 @@ def evaluate_model(clf, X_test, y_test, model_name):
       model_step = clf.named_steps["model"]
       importances = model_step.feature_importances_
       preprocessor = clf.named_steps["prep"]
-      feature_names = list(preprocessor.get_feature_names_out())
 
-      if len(feature_names) != len(importances):
-        feature_names = [f"feat_{i}" for i in range(len(importances))]
+      try:
+        raw_feature_names = list(preprocessor.get_feature_names_out())
+      except Exception:
+        raw_feature_names = [f"feat_{i}" for i in range(len(importances))]
 
-      imp_df = (pd.DataFrame({"feature": feature_names, "importance": importances}).sort_values("importance", ascending=False))
+      if len(raw_feature_names) != len(importances):
+        raw_feature_names = [f"feat_{i}" for i in range(len(importances))]
+
+      clean_names = []
+      feature_type = []
+      for fname in raw_feature_names:
+        if fname.startswith("num__"):
+          feature_type.append("numérica")
+          clean_names.append(fname.replace("num__", "", 1))
+        elif fname.startswith("cat__"):
+          feature_type.append("categórica")
+          clean_names.append(fname.replace("cat__", "", 1))
+        else:
+          feature_type.append("desconhecida")
+          clean_names.append(fname)
+
+      imp_df = (pd.DataFrame({"feature": clean_names, "feature_type": feature_type, "importance": importances}).sort_values("importance", ascending=False))
 
       imp_df["importance"] = imp_df["importance"] * 100
 

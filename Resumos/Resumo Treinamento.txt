@@ -1,0 +1,60 @@
+Organização e Limpeza:
+  - Eu importei tudo para o MongoDB
+  - Padronizei os nomes das colunas
+  - Filtrei apenas os transplantes renais KI
+  - Filtrei apenas transplantes com identificadores.
+
+Tratamento:
+  Quando importei o CSV no Python, fiz:
+    - remoção de linhas inválidas (alvo precisa ser 0 ou 1)
+    - conversão de valores como “Y/N/U” para 0/1/NaN
+    - conversão de textos numéricos para números reais
+    - remoção de colunas com milhares de categorias (que não ajudam o modelo)
+    - remoção de colunas que causam data leakage (informações pós-transplante)
+
+Balanceamento:
+  - Mantive todos os casos de rejeição
+  - Limitei a classe sem rejeição a 50 mil amostras
+
+Pré-processamento automático:
+  - Valores faltantes → preenchidos automaticamente
+  - Variáveis numéricas → padronizadas para a mesma escala
+  - Variáveis categóricas → convertidas com One-Hot Encoding (transforma texto em colunas 0/1)
+
+Treinei três modelos diferentes:
+  - Decision Tree
+  - Random Forest
+  - Rede Neural Artificial
+  - XGBoost
+
+Treinei com validação cruzada:
+  - Os dados são divididos em 5 partes
+  - Treina em 4 partes
+  - Testa na parte restante
+  - Repete 5 vezes
+  - Pega a média das métricas
+
+Avaliei o desempenho dos modelos:
+  Para cada um calculei:
+    - AUC
+    - Recall
+    - F1-score
+    - Acurácia
+    - Matriz de confusão
+    - Importância das variáveis (CSV)
+
+Comparei os modelos:
+  - Gerei um gráfico comparativo entre os modelos
+
+OBS: 
+  Acho que A Decision Tree atribuiu importância exagerada a BW6 e BW4.
+
+Escrever Sobre
+  Resultados completos
+  Discussão
+  Conclusão
+  Revisão bibliográfica expandida (resumo do TCC 1)
+  Tabelas e gráficos das métricas
+  Importância das variáveis
+  Comparação entre modelos
+  Trabalhos futuros
