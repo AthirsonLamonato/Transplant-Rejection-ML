@@ -1,7 +1,7 @@
 # Machine Learning para Predição Pré-Transplante de Rejeição Renal
 
 [![Python](https://img.shields.io/badge/Python-3.10-blue.svg)](https://www.python.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/AthirsonLamonato/Transplant-Rejection-ML/blob/main/MIT%20License)
 [![Status](https://img.shields.io/badge/Status-Concluído-success.svg)]()
 
 > Trabalho de Conclusão de Curso - Instituto Federal de Educação, Ciência e Tecnologia do Rio Grande do Sul
@@ -182,7 +182,7 @@ O projeto gera automaticamente:
 
 ## 📄 Licença
 
-Este projeto está sob a licença MIT. Veja o arquivo [LICENSE](LICENSE) para mais detalhes.
+Este projeto está sob a licença MIT. Veja o arquivo [![License](https://img.shields.io/badge/License-MIT-green.svg)](https://github.com/AthirsonLamonato/Transplant-Rejection-ML/blob/main/MIT%20License) para mais detalhes.
 
 ## 🙏 Agradecimentos
 
