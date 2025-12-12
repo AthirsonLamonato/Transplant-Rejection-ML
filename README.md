@@ -8,7 +8,7 @@
 
 ## 📋 Sobre o Projeto
 
-    Este projeto desenvolve e avalia modelos preditivos de rejeição do enxerto renal utilizando técnicas de Aprendizado de Máquina aplicadas exclusivamente a dados pré-transplante. O objetivo é auxiliar equipes médicas na estratificação de risco e tomada de decisões clínicas.
+Este projeto desenvolve e avalia modelos preditivos de rejeição do enxerto renal utilizando técnicas de Aprendizado de Máquina aplicadas exclusivamente a dados pré-transplante. O objetivo é auxiliar equipes médicas na estratificação de risco e tomada de decisões clínicas.
 
 ### 🎯 Principais Resultados
 
