@@ -177,8 +177,8 @@ O projeto gera automaticamente:
 
 - Instituto Federal do Rio Grande do Sul - Campus Ibirubá
 - Orientador: Prof. Andrws Aires Vieira
-- Email: [seu-email@exemplo.com]
-- LinkedIn: [seu-linkedin]
+- Email: [athirson.lamonato@gmail.com]
+- LinkedIn: [[seu-linkedin](https://www.linkedin.com/in/athirsonlamonato/)]
 
 ## 📄 Licença
 
